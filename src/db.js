@@ -1,11 +1,11 @@
-const Database = require('better-sqlite3');
+const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 const path = require('path');
 
 const file = process.env.DB_PATH || './data/orders.db';
 fs.mkdirSync(path.dirname(file), { recursive: true });
-const db = new Database(file);
-db.pragma('journal_mode = WAL');
+const db = new DatabaseSync(file);
+db.exec('PRAGMA journal_mode = WAL');
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS orders (
