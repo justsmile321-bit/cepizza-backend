@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>C&amp;E Pizza — Orders</title>
+<style>
+  :root { --red:#b71c1c; --green:#00733a; --cream:#fdf8ec; --ink:#1d1d1f; --muted:#6e6e73; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.4 -apple-system, system-ui, Segoe UI, Roboto, sans-serif; background:#f2f2f4; color:var(--ink); }
+  header { position:sticky; top:0; z-index:2; display:flex; align-items:center; gap:12px; padding:12px 16px;
+           background:var(--red); color:#fff; }
+  header h1 { margin:0; font-size:20px; font-family:Georgia, serif; }
+  header .sp { flex:1; }
+  header button { background:#fff; color:var(--red); border:0; border-radius:8px; padding:8px 12px; font-weight:700; cursor:pointer; }
+  #clock { opacity:.9; font-variant-numeric:tabular-nums; }
+  .board { display:grid; grid-template-columns:repeat(4, minmax(260px, 1fr)); gap:12px; padding:12px; overflow-x:auto; }
+  .col h2 { margin:4px 4px 10px; font-size:14px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+  .col h2 b { background:var(--ink); color:#fff; border-radius:10px; padding:1px 8px; margin-left:6px; }
+  .card { background:#fff; border-radius:12px; padding:12px; margin-bottom:10px; box-shadow:0 1px 3px rgba(0,0,0,.1);
+          border-left:6px solid var(--muted); }
+  .card.new { border-color:var(--red); animation:pulse 1.5s ease-in-out 3; }
+  .card.awaiting_zelle { border-color:#f39c12; }
+  .card.preparing { border-color:#2e86de; }
+  .card.ready { border-color:var(--green); }
+  @keyframes pulse { 50% { box-shadow:0 0 0 6px rgba(183,28,28,.25); } }
+  .top { display:flex; justify-content:space-between; align-items:baseline; }
+  .id { font-weight:800; font-size:18px; }
+  .age { color:var(--muted); font-size:13px; }
+  .tag { display:inline-block; font-size:12px; font-weight:700; padding:2px 8px; border-radius:6px; background:var(--cream); margin:4px 4px 0 0; }
+  .tag.delivery { background:#e8f1fd; color:#1b5fb5; }
+  .tag.pay { background:#e9f7ef; color:var(--green); }
+  .tag.warn { background:#fff4e0; color:#a05a00; }
+  ul { margin:8px 0; padding-left:0; list-style:none; }
+  li { padding:4px 0; border-top:1px dashed #e3e3e3; }
+  li .q { font-weight:800; margin-right:6px; }
+  li .d { color:var(--muted); font-size:13px; display:block; margin-left:22px; }
+  li .n { color:var(--red); font-size:13px; font-style:italic; display:block; margin-left:22px; }
+  .cust { font-size:14px; margin-top:6px; }
+  .cust a { color:var(--ink); }
+  .total { font-weight:800; }
+  .actions { display:flex; gap:8px; margin-top:10px; }
+  .actions button { flex:1; border:0; border-radius:8px; padding:10px; font-weight:700; font-size:15px; cursor:pointer; color:#fff; background:var(--ink); }
+  .actions .go { background:var(--green); }
+  .actions .x { flex:0 0 auto; background:#e5e5ea; color:var(--ink); }
+  .empty { color:var(--muted); text-align:center; padding:20px 0; }
+  #err { display:none; background:#fff4e0; color:#a05a00; padding:8px 16px; font-weight:600; }
+  @media print { header, .actions, #err { display:none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>C&amp;E Pizza · Orders</h1>
+  <span class="sp"></span>
+  <span id="clock"></span>
+  <button id="sound">🔔 Enable sound</button>
+</header>
+<div id="err">Can't reach the server — retrying…</div>
+<div class="board">
+  <section class="col" data-s="new"><h2>New<b>0</b></h2><div></div></section>
+  <section class="col" data-s="awaiting_zelle"><h2>Awaiting Zelle<b>0</b></h2><div></div></section>
+  <section class="col" data-s="preparing"><h2>Preparing<b>0</b></h2><div></div></section>
+  <section class="col" data-s="ready"><h2>Ready<b>0</b></h2><div></div></section>
+</div>
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const usd = (c) => '$' + (c / 100).toFixed(2);
+const METHOD = { card: 'Card', paypal: 'PayPal', zelle: 'Zelle', apple_pay: 'Apple Pay' };
+const NEXT = {
+  new: [['Start', 'preparing', 'go']],
+  awaiting_zelle: [['Zelle received ✓', 'new', 'go']],
+  preparing: [['Ready', 'ready', 'go']],
+  ready: [['Picked up / Delivered', 'completed', 'go']],
+};
+
+let seen = null, audio = null;
+$('#sound').onclick = () => {
+  audio = new (window.AudioContext || window.webkitAudioContext)();
+  beep(); $('#sound').textContent = '🔔 Sound on';
+};
+function beep() {
+  if (!audio) return;
+  [0, .25, .5].forEach((t) => {
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.frequency.value = 880; o.connect(g); g.connect(audio.destination);
+    g.gain.setValueAtTime(.3, audio.currentTime + t); g.gain.exponentialRampToValueAtTime(.001, audio.currentTime + t + .2);
+    o.start(audio.currentTime + t); o.stop(audio.currentTime + t + .2);
+  });
+}
+
+function ago(ts) {
+  const m = Math.max(0, Math.round((Date.now() - new Date(ts.replace(' ', 'T') + 'Z')) / 60000));
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.floor(m / 60)}h ${m % 60}m ago`;
+}
+
+function card(o) {
+  const c = o.customer;
+  const items = o.items.map((l) => {
+    const d = [l.size, ...l.choices.map((x) => x.option), ...(l.addOns.length ? ['+ ' + l.addOns.join(', ')] : [])].filter(Boolean);
+    return `<li><span class="q">${l.quantity}×</span>${esc(l.name)}
+      ${d.length ? `<span class="d">${esc(d.join(' · '))}</span>` : ''}
+      ${l.notes ? `<span class="n">“${esc(l.notes)}”</span>` : ''}</li>`;
+  }).join('');
+  const btns = (NEXT[o.status] || []).map(([label, s, cls]) =>
+    `<button class="${cls}" data-id="${o.id}" data-s="${s}">${label}</button>`).join('');
+  const cancel = o.status !== 'ready' ? `<button class="x" data-id="${o.id}" data-s="cancelled">Cancel</button>` : '';
+  return `<div class="card ${o.status}">
+    <div class="top"><span class="id">${o.orderId}</span><span class="age">${ago(o.created_at)}</span></div>
+    <span class="tag ${o.fulfillment === 'delivery' ? 'delivery' : ''}">${o.fulfillment === 'delivery' ? '🚗 Delivery' : '🛍 Pickup'}</span>
+    <span class="tag ${o.status === 'awaiting_zelle' ? 'warn' : 'pay'}">${o.status === 'awaiting_zelle' ? 'Unpaid · Zelle' : 'Paid · ' + METHOD[o.payment_method]}</span>
+    <ul>${items}</ul>
+    ${o.notes ? `<div class="n" style="color:var(--red);font-style:italic">Order note: ${esc(o.notes)}</div>` : ''}
+    <div class="cust"><b>${esc(c.name)}</b> · <a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>
+      ${o.fulfillment === 'delivery' ? `<br>📍 ${esc(c.address)}` : ''}</div>
+    <div class="cust total">Total ${usd(o.total)}</div>
+    <div class="actions">${btns}${cancel}</div>
+  </div>`;
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/staff/orders', { cache: 'no-store' });
+    if (!r.ok) throw new Error(r.status);
+    const orders = await r.json();
+    $('#err').style.display = 'none';
+    const ids = new Set(orders.filter((o) => o.status === 'new' || o.status === 'awaiting_zelle').map((o) => o.id));
+    if (seen && [...ids].some((id) => !seen.has(id))) beep();
+    seen = ids;
+    document.querySelectorAll('.col').forEach((col) => {
+      const list = orders.filter((o) => o.status === col.dataset.s).reverse(); // oldest first
+      $('b', col).textContent = list.length;
+      $('div', col).innerHTML = list.length ? list.map(card).join('') : '<div class="empty">—</div>';
+    });
+  } catch { $('#err').style.display = 'block'; }
+}
+
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-id]');
+  if (!b) return;
+  if (b.dataset.s === 'cancelled' && !confirm('Cancel this order? Refunds for card/PayPal are issued from the Stripe/PayPal dashboard.')) return;
+  b.disabled = true;
+  await fetch(`/api/staff/orders/${b.dataset.id}/status`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: b.dataset.s }),
+  });
+  load();
+});
+
+setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }, 1000);
+load(); setInterval(load, 5000);
+</script>
+</body>
+</html>
