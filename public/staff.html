@@ -112,7 +112,7 @@ function card(o) {
     <ul>${items}</ul>
     ${o.notes ? `<div class="n" style="color:var(--red);font-style:italic">Order note: ${esc(o.notes)}</div>` : ''}
     <div class="cust"><b>${esc(c.name)}</b> · <a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>
-      ${o.fulfillment === 'delivery' ? `<br>📍 ${esc(c.address)}` : ''}</div>
+      ${o.fulfillment === 'delivery' ? `<br>📍 ${esc(c.address)}${c.distanceMiles != null ? ` <b>(${c.distanceMiles} mi)</b>` : ''}` : ''}</div>
     <div class="cust total">Total ${usd(o.total)}</div>
     <div class="actions">${btns}${cancel}</div>
   </div>`;

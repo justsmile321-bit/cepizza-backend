@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const db = require('./db');
 const { priceOrder, OrderError } = require('./pricing');
 const pay = require('./payments');
+const { checkDelivery } = require('./delivery');
 
 const app = express();
 const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
@@ -35,6 +36,12 @@ app.post('/api/orders', async (req, res) => {
     const priced = priceOrder(req.body);
     if (priced.payment_method === 'apple_pay')
       throw new OrderError('Apple Pay is coming soon — please choose card, PayPal or Zelle.');
+    if (priced.fulfillment === 'delivery') {
+      const c = req.body.customer || {};
+      const check = await checkDelivery(priced.customer.address, Number(c.latitude), Number(c.longitude));
+      if (!check.ok) throw new OrderError(check.message);
+      priced.customer.distanceMiles = check.miles;
+    }
 
     const status = priced.payment_method === 'zelle' ? 'awaiting_zelle' : 'pending_payment';
     id = db.insert({ ...priced, status });
